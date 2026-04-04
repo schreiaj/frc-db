@@ -1,0 +1,217 @@
+import argparse
+import json
+import os
+import time
+from datetime import datetime
+from io import BytesIO
+
+import boto3
+import httpx
+import polars as pl
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# --- Configuration ---
+TBA_KEY = os.getenv("TBA_KEY")
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
+R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
+R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
+BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
+
+# Explicit Polars Schemas (Option 2)
+MATCH_SCHEMA = {
+    "key": pl.String,
+    "event_key": pl.String,
+    "year": pl.Int32,
+    "comp_level": pl.String,
+    "match_number": pl.Int32,
+    "red_teams": pl.List(pl.String),
+    "blue_teams": pl.List(pl.String),
+    "red_score": pl.Int32,
+    "blue_score": pl.Int32,
+    "time": pl.Int64,  # Use Int64 to prevent overflow/underflow
+    "score_breakdown": pl.String,
+}
+
+EVENT_SCHEMA = {
+    "key": pl.String,
+    "name": pl.String,
+    "event_code": pl.String,
+    "event_type": pl.Int32,
+    "city": pl.String,
+    "state_prov": pl.String,
+    "country": pl.String,
+    "start_date": pl.String,
+    "end_date": pl.String,
+    "year": pl.Int32,
+    "district": pl.String,
+}
+
+TEAM_SCHEMA = {
+    "key": pl.String,
+    "team_number": pl.Int32,
+    "nickname": pl.String,
+    "city": pl.String,
+    "state_prov": pl.String,
+    "country": pl.String,
+    "rookie_year": pl.Int64,  # Int64 to match the 'time' safety pattern
+}
+
+
+# Initialize S3 client for R2
+s3_client = boto3.client(
+    "s3",
+    endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+    aws_access_key_id=R2_ACCESS_KEY,
+    aws_secret_access_key=R2_SECRET_KEY,
+)
+
+client = httpx.Client(headers={"X-TBA-Auth-Key": TBA_KEY}, timeout=30.0)
+
+
+def upload_to_r2(df, key):
+    buffer = BytesIO()
+    df.write_parquet(buffer)
+    s3_client.put_object(Bucket=BUCKET_NAME, Key=key, Body=buffer.getvalue())
+    print(f"✅ Uploaded to {key}")
+
+
+def backfill_events(year):
+    print(f"Fetching events for {year}...")
+    res = client.get(f"https://www.thebluealliance.com/api/v3/events/{year}")
+    events = res.json()
+
+    event_list = []
+    for e in events:
+        event_list.append(
+            {
+                "key": e["key"],
+                "name": e["name"],
+                "event_code": e["event_code"],
+                "event_type": e["event_type"],
+                "city": e.get("city"),
+                "state_prov": e.get("state_prov"),
+                "country": e.get("country"),
+                "start_date": e.get("start_date"),
+                "end_date": e.get("end_date"),
+                "year": year,
+                "district": e["district"]["display_name"]
+                if e.get("district")
+                else None,
+            }
+        )
+
+    if event_list:
+        df = pl.DataFrame(event_list, schema=EVENT_SCHEMA)
+        upload_to_r2(df, f"events/year={year}/data.parquet")
+
+
+def backfill_matches(year):
+    print(f"Processing matches for {year}...")
+    events_res = client.get(
+        f"https://www.thebluealliance.com/api/v3/events/{year}/simple"
+    )
+    event_keys = [e["key"] for e in events_res.json()]
+
+    all_year_matches = []
+    for event_key in event_keys:
+        res = client.get(
+            f"https://www.thebluealliance.com/api/v3/event/{event_key}/matches"
+        )
+        matches = res.json()
+        if not matches:
+            continue
+
+        for m in matches:
+            # Data Hygiene (Option 3): Filter out the 1899 ghost timestamp
+            m_time = m.get("time")
+            if m_time and m_time < 0:
+                m_time = None
+
+            all_year_matches.append(
+                {
+                    "key": m["key"],
+                    "event_key": m["event_key"],
+                    "year": year,
+                    "comp_level": m["comp_level"],
+                    "match_number": m["match_number"],
+                    "red_teams": m["alliances"]["red"]["team_keys"],
+                    "blue_teams": m["alliances"]["blue"]["team_keys"],
+                    "red_score": m["alliances"]["red"]["score"],
+                    "blue_score": m["alliances"]["blue"]["score"],
+                    "time": m_time,
+                    "score_breakdown": json.dumps(m.get("score_breakdown"))
+                    if m.get("score_breakdown")
+                    else None,
+                }
+            )
+        time.sleep(0.05)
+
+    if all_year_matches:
+        # Use Explicit Schema (Option 2)
+        df = pl.DataFrame(all_year_matches, schema=MATCH_SCHEMA)
+        upload_to_r2(df, f"matches/year={year}/data.parquet")
+
+
+def backfill_teams():
+    """Iterates through TBA team pages until no more teams are found."""
+    print("🚀 Fetching all teams from TBA...")
+    all_teams = []
+    page = 0
+
+    while True:
+        # TBA returns 500 teams per page
+        res = client.get(f"https://www.thebluealliance.com/api/v3/teams/{page}")
+        data = res.json()
+
+        if not data or len(data) == 0:
+            break
+
+        for t in data:
+            all_teams.append(
+                {
+                    "key": t["key"],
+                    "team_number": t["team_number"],
+                    "nickname": t.get("nickname"),
+                    "city": t.get("city"),
+                    "state_prov": t.get("state_prov"),
+                    "country": t.get("country"),
+                    "rookie_year": t.get("rookie_year"),
+                }
+            )
+
+        print(f"  Processed page {page} ({len(all_teams)} teams total)...")
+        page += 1
+        time.sleep(0.5)  # Avoid hitting the rate limit during bulk fetch
+
+    if all_teams:
+        df = pl.DataFrame(all_teams, schema=TEAM_SCHEMA)
+        upload_to_r2(df, "teams/all_teams.parquet")
+    else:
+        print("⚠️ No teams found to upload.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", type=int, help="Start year for backfill")
+    parser.add_argument("--end", type=int, help="End year for backfill")
+    parser.add_argument(
+        "--current-year-only", action="store_true", help="Only process the current year"
+    )
+    parser.add_argument("--teams", action="store_true", help="Export teams")
+    args = parser.parse_args()
+
+    if args.teams:
+        backfill_teams()
+
+    elif args.current_year_only:
+        current_year = datetime.now().year
+        backfill_events(current_year)
+        backfill_matches(current_year)
+    elif args.start and args.end:
+        for year in range(args.start, args.end + 1):
+            backfill_events(year)
+            backfill_matches(year)
+    else:
+        print("❌ Please provide --start and --end, or use --current-year-only")
