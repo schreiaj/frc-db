@@ -74,7 +74,7 @@ def upload_to_r2(df, key):
     buffer = BytesIO()
     df.write_parquet(buffer)
     s3_client.put_object(Bucket=BUCKET_NAME, Key=key, Body=buffer.getvalue())
-    print(f"✅ Uploaded to {key}")
+    print(f"Uploaded to {key}")
 
 
 def backfill_events(year):
@@ -156,7 +156,7 @@ def backfill_matches(year):
 
 def backfill_teams():
     """Iterates through TBA team pages until no more teams are found."""
-    print("🚀 Fetching all teams from TBA...")
+    print("Fetching all teams from TBA...")
     all_teams = []
     page = 0
 
@@ -189,7 +189,7 @@ def backfill_teams():
         df = pl.DataFrame(all_teams, schema=TEAM_SCHEMA)
         upload_to_r2(df, "teams/all_teams.parquet")
     else:
-        print("⚠️ No teams found to upload.")
+        print("No teams found to upload.")
 
 
 if __name__ == "__main__":
@@ -214,4 +214,4 @@ if __name__ == "__main__":
             backfill_events(year)
             backfill_matches(year)
     else:
-        print("❌ Please provide --start and --end, or use --current-year-only")
+        print("Please provide --start and --end, or use --current-year-only")
