@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from io import BytesIO
 
@@ -116,7 +117,45 @@ def backfill_events(year):
         upload_to_r2(df, f"events/year={year}/data.parquet")
 
 
-def backfill_matches(year):
+def fetch_event_matches(event_key, year):
+    """Fetch and parse matches for a single event."""
+    res = client.get(
+        f"https://www.thebluealliance.com/api/v3/event/{event_key}/matches"
+    )
+    matches = res.json()
+    if not matches:
+        return []
+
+    parsed = []
+    for m in matches:
+        # Data Hygiene (Option 3): Filter out the 1899 ghost timestamp
+        m_time = m.get("time")
+        if m_time and m_time < 0:
+            m_time = None
+
+        parsed.append(
+            {
+                "key": m["key"],
+                "event_key": m["event_key"],
+                "year": year,
+                "comp_level": m["comp_level"],
+                "match_number": m["match_number"],
+                "red_teams": m["alliances"]["red"]["team_keys"],
+                "blue_teams": m["alliances"]["blue"]["team_keys"],
+                "red_score": m["alliances"]["red"]["score"],
+                "blue_score": m["alliances"]["blue"]["score"],
+                "time": m_time,
+                "score_breakdown": json.dumps(
+                    m.get("score_breakdown"), ensure_ascii=True
+                )
+                if m.get("score_breakdown")
+                else None,
+            }
+        )
+    return parsed
+
+
+def backfill_matches(year, parallel=False, max_workers=4):
     print(f"Processing matches for {year}...")
     events_res = client.get(
         f"https://www.thebluealliance.com/api/v3/events/{year}/simple"
@@ -124,40 +163,20 @@ def backfill_matches(year):
     event_keys = [e["key"] for e in events_res.json()]
 
     all_year_matches = []
-    for event_key in event_keys:
-        res = client.get(
-            f"https://www.thebluealliance.com/api/v3/event/{event_key}/matches"
-        )
-        matches = res.json()
-        if not matches:
-            continue
 
-        for m in matches:
-            # Data Hygiene (Option 3): Filter out the 1899 ghost timestamp
-            m_time = m.get("time")
-            if m_time and m_time < 0:
-                m_time = None
-
-            all_year_matches.append(
-                {
-                    "key": m["key"],
-                    "event_key": m["event_key"],
-                    "year": year,
-                    "comp_level": m["comp_level"],
-                    "match_number": m["match_number"],
-                    "red_teams": m["alliances"]["red"]["team_keys"],
-                    "blue_teams": m["alliances"]["blue"]["team_keys"],
-                    "red_score": m["alliances"]["red"]["score"],
-                    "blue_score": m["alliances"]["blue"]["score"],
-                    "time": m_time,
-                    "score_breakdown": json.dumps(
-                        m.get("score_breakdown"), ensure_ascii=True
-                    )
-                    if m.get("score_breakdown")
-                    else None,
-                }
-            )
-        time.sleep(0.05)
+    if parallel:
+        print(f"  Fetching {len(event_keys)} events with {max_workers} workers...")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(fetch_event_matches, ek, year): ek
+                for ek in event_keys
+            }
+            for future in as_completed(futures):
+                all_year_matches.extend(future.result())
+    else:
+        for event_key in event_keys:
+            all_year_matches.extend(fetch_event_matches(event_key, year))
+            time.sleep(0.05)
 
     if all_year_matches:
         # Use Explicit Schema (Option 2)
@@ -211,6 +230,8 @@ if __name__ == "__main__":
         "--current-year-only", action="store_true", help="Only process the current year"
     )
     parser.add_argument("--teams", action="store_true", help="Export teams")
+    parser.add_argument("--parallel", action="store_true", help="Fetch matches in parallel")
+    parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
     args = parser.parse_args()
 
     if args.teams:
@@ -219,10 +240,10 @@ if __name__ == "__main__":
     elif args.current_year_only:
         current_year = datetime.now().year
         backfill_events(current_year)
-        backfill_matches(current_year)
+        backfill_matches(current_year, parallel=args.parallel, max_workers=args.workers)
     elif args.start and args.end:
         for year in range(args.start, args.end + 1):
             backfill_events(year)
-            backfill_matches(year)
+            backfill_matches(year, parallel=args.parallel, max_workers=args.workers)
     else:
         print("Please provide --start and --end, or use --current-year-only")
