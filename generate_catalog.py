@@ -39,7 +39,7 @@ def create_pointer_db(output_path="data.db"):
     con.execute("INSTALL httpfs; LOAD httpfs;")
 
     base_url = "https://frc-db.dev"
-    years = range(1992, 2027)
+    years = range(2005, 2027)
 
     match_urls = [f"'{base_url}/matches/year={y}/data.parquet'" for y in years]
     event_urls = [f"'{base_url}/events/year={y}/data.parquet'" for y in years]
