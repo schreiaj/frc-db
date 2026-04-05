@@ -25,8 +25,8 @@ jobs:
       - name: Update Catalog
         run: uv run python generate_catalog.py
         env:
-          PYTHONUTF8: "1" # This tells Python 3.7+ to strictly use UTF-8
-          PYTHONIOENCODING: "utf-8"
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}

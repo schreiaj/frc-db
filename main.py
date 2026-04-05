@@ -10,6 +10,15 @@ import httpx
 import polars as pl
 from dotenv import load_dotenv
 
+
+def sanitize_str(value):
+    """Ensure a string is valid UTF-8 by replacing bad bytes."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value.encode("utf-8", errors="replace").decode("utf-8")
+
 load_dotenv()
 
 # --- Configuration ---
@@ -87,16 +96,16 @@ def backfill_events(year):
         event_list.append(
             {
                 "key": e["key"],
-                "name": e["name"],
+                "name": sanitize_str(e["name"]),
                 "event_code": e["event_code"],
                 "event_type": e["event_type"],
-                "city": e.get("city"),
-                "state_prov": e.get("state_prov"),
-                "country": e.get("country"),
+                "city": sanitize_str(e.get("city")),
+                "state_prov": sanitize_str(e.get("state_prov")),
+                "country": sanitize_str(e.get("country")),
                 "start_date": e.get("start_date"),
                 "end_date": e.get("end_date"),
                 "year": year,
-                "district": e["district"]["display_name"]
+                "district": sanitize_str(e["district"]["display_name"])
                 if e.get("district")
                 else None,
             }
@@ -141,7 +150,9 @@ def backfill_matches(year):
                     "red_score": m["alliances"]["red"]["score"],
                     "blue_score": m["alliances"]["blue"]["score"],
                     "time": m_time,
-                    "score_breakdown": json.dumps(m.get("score_breakdown"))
+                    "score_breakdown": json.dumps(
+                        m.get("score_breakdown"), ensure_ascii=True
+                    )
                     if m.get("score_breakdown")
                     else None,
                 }
@@ -173,10 +184,10 @@ def backfill_teams():
                 {
                     "key": t["key"],
                     "team_number": t["team_number"],
-                    "nickname": t.get("nickname"),
-                    "city": t.get("city"),
-                    "state_prov": t.get("state_prov"),
-                    "country": t.get("country"),
+                    "nickname": sanitize_str(t.get("nickname")),
+                    "city": sanitize_str(t.get("city")),
+                    "state_prov": sanitize_str(t.get("state_prov")),
+                    "country": sanitize_str(t.get("country")),
                     "rookie_year": t.get("rookie_year"),
                 }
             )
