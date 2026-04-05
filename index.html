@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>FRC Data Explorer - YAML Edition</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+        <style>
+            body {
+                font-family: system-ui, sans-serif;
+                padding: 2rem;
+                background: #f4f4f9;
+            }
+            .dashboard-card {
+                background: white;
+                padding: 2rem;
+                border-radius: 12px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+                max-width: 900px;
+                margin: auto;
+            }
+            .header-info {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 2rem;
+                padding-bottom: 1rem;
+                border-bottom: 1px solid #eee;
+            }
+            h2 {
+                margin: 0;
+            }
+            select {
+                padding: 0.4rem;
+                border-radius: 4px;
+                border: 1px solid #ccc;
+                font-size: 1rem;
+            }
+            .spinner {
+                color: #666;
+                font-size: 0.9rem;
+                margin-left: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="dashboard-card">
+            <div class="header-info">
+                <h2>Winning Score Analysis</h2>
+                <div>
+                    <label for="year-select"><strong>Season: </strong></label>
+                    <select id="year-select"></select>
+                    <span
+                        id="loading-spinner"
+                        class="spinner"
+                        style="display: none"
+                        >⏳ Loading...</span
+                    >
+                </div>
+            </div>
+            <div id="charts-container"></div>
+        </div>
+
+        <script type="module">
+            import * as vg from "https://cdn.jsdelivr.net/npm/@uwdata/vgplot/+esm";
+            import {
+                parseSpec,
+                astToDOM,
+            } from "https://cdn.jsdelivr.net/npm/@uwdata/mosaic-spec/+esm";
+
+            const coord = vg.coordinator();
+            const container = document.getElementById("charts-container");
+            const select = document.getElementById("year-select");
+            const spinner = document.getElementById("loading-spinner");
+
+            const dashboardYaml = `
+            params:
+              filter:
+                select: crossfilter
+            vconcat:
+              - plot:
+                  - mark: rectY
+                    data: { from: '{{VIEW_NAME}}', filterBy: $filter }
+                    x: { bin: 'score' }
+                    y: { count: null }
+                    fill: steelblue
+                    inset: 0.5
+                  - select: intervalX
+                    as: $filter
+                width: 800
+                height: 250
+                marginTop: 20
+                marginBottom: 40
+                xLabel: Match Score
+                yLabel: Frequency
+              - plot:
+                  - mark: barY
+                    data: { from: '{{VIEW_NAME}}', filterBy: $filter }
+                    x: comp_level
+                    y: { count: null }
+                    fill: orange
+                    sort: { x: -y }
+                  - select: toggleX
+                    as: $filter
+                width: 800
+                height: 250
+                marginTop: 20
+                marginBottom: 40
+                xLabel: Comp Level
+                yLabel: Count
+              - plot:
+                  - mark: barY
+                    data: { from: '{{VIEW_NAME}}', filterBy: $filter }
+                    x: event_type_enum
+                    y: { count: null }
+                    fill: purple
+                    sort: { x: -y }
+                  - select: toggleX
+                    as: $filter
+                width: 800
+                height: 250
+                marginTop: 20
+                marginBottom: 40
+                xLabel: Event Type
+                yLabel: Count
+            `;
+
+            async function init() {
+                await coord.databaseConnector(vg.wasmConnector());
+                spinner.style.display = "inline";
+
+                // 1. Pure DuckDB setup. No SQLite needed.
+                await coord.exec(`
+                    INSTALL httpfs; LOAD httpfs;
+                    ATTACH 'https://frc-db.dev/data.db' AS frc (READ_ONLY);
+                `);
+
+                // 2. Dynamically pull years from your newly attached catalog
+                const yearResult = await coord.query(`
+                    SELECT DISTINCT year
+                    FROM frc.events
+                    WHERE year IS NOT NULL
+                    ORDER BY year DESC;
+                `);
+
+                // This is just a visualization tool mapping event types to names
+                await coord.exec(`
+                    CREATE OR REPLACE TEMP TABLE event_type_enum (
+                        id INTEGER PRIMARY KEY,
+                        label TEXT
+                    );
+
+                    INSERT INTO event_type_enum (id, label) VALUES
+                        (0, 'Regional'),
+                        (1, 'District'),
+                        (2, 'District CMP'),
+                        (3, 'CMP Division'),
+                        (4, 'CMP Finals'),
+                        (5, 'District House'),
+                        (6, 'Festival of Champions'),
+                        (7, 'Remote');
+                `);
+
+                const availableYears = yearResult
+                    .toArray()
+                    .map((row) => row.year);
+
+                availableYears.forEach((y) => {
+                    select.add(new Option(y, y));
+                });
+
+                select.addEventListener("change", async (e) => {
+                    await loadYearData(parseInt(e.target.value));
+                });
+
+                await loadYearData(availableYears[0]);
+            }
+
+            async function loadYearData(year) {
+                spinner.style.display = "inline";
+                try {
+                    const viewName = `scores_${year}`;
+
+                    // 3. The Hybrid Query: Cache-friendly matches joined natively to events
+                    await coord.exec(`
+                        CREATE OR REPLACE TEMP TABLE ${viewName} AS
+                        WITH match_data AS (
+                            SELECT greatest(red_score, blue_score) AS score, comp_level, event_key FROM frc.matches WHERE year = ${year}
+                        )
+                        SELECT
+                            m.score,
+                            m.comp_level,
+                            e.name AS event_name,
+                            enum.label as event_type_enum
+                        FROM match_data m
+                        JOIN frc.events e ON m.event_key = e.key
+                        JOIN event_type_enum enum ON e.event_type = enum.id
+                        WHERE e.event_type < 6;
+                    `);
+
+                    // 4. Parse and Render
+                    const configuredYaml = dashboardYaml.replace(
+                        /{{VIEW_NAME}}/g,
+                        viewName,
+                    );
+                    const spec = jsyaml.load(configuredYaml);
+                    const ast = parseSpec(spec);
+                    const { element } = await astToDOM(ast);
+
+                    container.innerHTML = "";
+                    container.appendChild(element);
+                } catch (e) {
+                    console.error("Data Load Error:", e);
+                    container.innerHTML = `<div style="color: red; padding: 1rem;">Error: ${e.message}</div>`;
+                } finally {
+                    spinner.style.display = "none";
+                }
+            }
+
+            init();
+        </script>
+    </body>
+</html>
