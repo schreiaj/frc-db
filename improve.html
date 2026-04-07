@@ -59,6 +59,24 @@
             </div>
             <div id="charts-container"></div>
         </div>
+        <div class="dashboard-card">
+            <div class="header-info">
+                <h2>The How</h2>
+            </div>
+            <div>
+                This is basically taking each event and for every single team
+                computing the percentile score their first match fell into and
+                the last, then it averages the scores over the event. The
+                premise is that in general later matches should be higher
+                scoring as teams refine their machines and understand how to
+                play the game.
+                <br />
+                A green arrow denotes a shift to later matches trending towards
+                higher percentile scores. A red the opposite. If the premise
+                that teams get better as events go on holds, it should be mostly
+                green.
+            </div>
+        </div>
 
         <script type="module">
             import * as vg from "https://cdn.jsdelivr.net/npm/@uwdata/vgplot/+esm";
@@ -73,10 +91,14 @@
             const spinner = document.getElementById("loading-spinner");
 
             const dashboardYaml = `
+              params:
+                filter:
+                  select: crossfilter
               vconcat:
                 - plot:
+
                     - mark: arrow
-                      data: { from: '{{VIEW_NAME}}' }
+                      data: { from: '{{VIEW_NAME}}' , filterBy: $filter }
                       x1: avg_start_percentile
                       x2: avg_end_percentile
                       y1: team_count
@@ -88,15 +110,16 @@
                       tip: true
                       title: event_name
 
-
                   width: 800
-                  height: 250
+                  height: 600
                   marginTop: 40
                   marginBottom: 40
                   yLabel: "Team Count"
                   xLabel: "Avg Percentile"
                   colorRange: ["red","$ccc", "green"]
                   colorDomain: [-10, 10]
+
+
 
             `;
 
