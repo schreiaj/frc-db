@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>FRC Data Explorer - YAML Edition</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+        <style>
+            body {
+                font-family: system-ui, sans-serif;
+                padding: 2rem;
+                background: #f4f4f9;
+            }
+            .dashboard-card {
+                background: white;
+                padding: 2rem;
+                border-radius: 12px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+                max-width: 900px;
+                margin: auto;
+            }
+            .header-info {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 2rem;
+                padding-bottom: 1rem;
+                border-bottom: 1px solid #eee;
+            }
+            h2 {
+                margin: 0;
+            }
+            select {
+                padding: 0.4rem;
+                border-radius: 4px;
+                border: 1px solid #ccc;
+                font-size: 1rem;
+            }
+            .spinner {
+                color: #666;
+                font-size: 0.9rem;
+                margin-left: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="dashboard-card">
+            <div class="header-info">
+                <h2>Do Teams Improve...</h2>
+                <div>
+                    <label for="year-select"><strong>Season: </strong></label>
+                    <select id="year-select"></select>
+                    <span
+                        id="loading-spinner"
+                        class="spinner"
+                        style="display: none"
+                        >⏳ Loading...</span
+                    >
+                </div>
+            </div>
+            <div id="charts-container"></div>
+        </div>
+
+        <script type="module">
+            import * as vg from "https://cdn.jsdelivr.net/npm/@uwdata/vgplot/+esm";
+            import {
+                parseSpec,
+                astToDOM,
+            } from "https://cdn.jsdelivr.net/npm/@uwdata/mosaic-spec/+esm";
+
+            const coord = vg.coordinator();
+            const container = document.getElementById("charts-container");
+            const select = document.getElementById("year-select");
+            const spinner = document.getElementById("loading-spinner");
+
+            const dashboardYaml = `
+              vconcat:
+                - plot:
+                    - mark: arrow
+                      data: { from: '{{VIEW_NAME}}' }
+                      x1: avg_start_percentile
+                      x2: avg_end_percentile
+                      y1: team_count
+                      y2: team_count
+                      stroke: avg_momentum
+                      bend: true
+                      opacity: 0.6
+                      strokeWidth: 2
+
+
+                  width: 800
+                  height: 250
+                  marginTop: 40
+                  marginBottom: 40
+                  yLabel: "Team Count"
+                  xLabel: "Avg Percentile"
+                  colorRange: ["red","$ccc", "green"]
+                  colorDomain: [-10, 10]
+
+            `;
+
+            async function init() {
+                await coord.databaseConnector(vg.wasmConnector());
+                spinner.style.display = "inline";
+
+                // 1. Pure DuckDB setup. No SQLite needed.
+                await coord.exec(`
+                    INSTALL httpfs; LOAD httpfs;
+                    ATTACH 'https://frc-db.dev/data.db' AS frc (READ_ONLY);
+                `);
+
+                // 2. Dynamically pull years from your newly attached catalog
+                const yearResult = await coord.query(`
+                    SELECT DISTINCT year
+                    FROM frc.events
+                    WHERE year IS NOT NULL
+                    ORDER BY year DESC;
+                `);
+
+                // This is just a visualization tool mapping event types to names
+                await coord.exec(`
+                    CREATE OR REPLACE TEMP TABLE event_type_enum (
+                        id INTEGER PRIMARY KEY,
+                        label TEXT
+                    );
+
+                    INSERT INTO event_type_enum (id, label) VALUES
+                        (0, 'Regional'),
+                        (1, 'District'),
+                        (2, 'District CMP'),
+                        (3, 'CMP Division'),
+                        (4, 'CMP Finals'),
+                        (5, 'District Champsionship Division'),
+                        (6, 'Festival of Champions'),
+                        (7, 'Remote');
+                `);
+
+                const availableYears = yearResult
+                    .toArray()
+                    .map((row) => row.year);
+
+                availableYears.forEach((y) => {
+                    select.add(new Option(y, y));
+                });
+
+                select.addEventListener("change", async (e) => {
+                    await loadYearData(parseInt(e.target.value));
+                });
+
+                await loadYearData(availableYears[0]);
+            }
+
+            async function loadYearData(year) {
+                spinner.style.display = "inline";
+                try {
+                    const viewName = `scores_${year}`;
+
+                    // 3. The Hybrid Query: Cache-friendly matches joined natively to events
+                    await coord.exec(`
+                        CREATE OR REPLACE TEMP TABLE ${viewName} AS
+                        WITH team_scores AS (
+                            -- 1. Calculate Percentile Rank for every alliance score within its Year
+                            SELECT
+                                m.time, m.event_key, m.year, m.comp_level,
+                                unnest(m.red_teams) AS team,
+                                PERCENT_RANK() OVER (PARTITION BY m.year ORDER BY m.red_score ASC) * 100 AS percentile
+                            FROM frc.matches m
+                            WHERE m.comp_level = 'qm'
+                            AND m.year ==${year}
+
+                            UNION ALL
+
+                            SELECT
+                                m.time, m.event_key, m.year, m.comp_level,
+                                unnest(m.blue_teams) AS team,
+                                PERCENT_RANK() OVER (PARTITION BY m.year ORDER BY m.blue_score ASC) * 100 AS percentile
+                            FROM frc.matches m
+                            WHERE m.comp_level = 'qm'
+                            AND m.year ==${year}
+                        ),
+                        team_event_deltas AS (
+                            -- 2. Calculate Start, End, and Delta (Momentum) for each team at each event
+                            SELECT
+                                year,
+                                event_key,
+                                team,
+                                MAX(CASE WHEN mNumber = 1 THEN percentile END) AS first_p,
+                                MAX(CASE WHEN mNumber = total_quals THEN percentile END) AS last_p,
+                                (MAX(CASE WHEN mNumber = total_quals THEN percentile END) -
+                                 MAX(CASE WHEN mNumber = 1 THEN percentile END)) AS delta
+                            FROM (
+                                SELECT *,
+                                    ROW_NUMBER() OVER (PARTITION BY event_key, team ORDER BY time ASC) AS mNumber,
+                                    COUNT(*) OVER (PARTITION BY event_key, team) AS total_quals
+                                FROM team_scores
+                            )
+                            GROUP BY year, event_key, team
+                        )
+                        -- 3. Final Aggregation with Start/End Percentiles
+                        SELECT
+                            d.year,
+                            -- Extract week from start_date; using ANY_VALUE because it's constant per event
+                            week(ANY_VALUE(e.start_date::DATE)) AS week,
+                            coalesce(e.name, '_') AS event_name,
+                            -- New Average Metrics
+                            AVG(d.first_p)::DOUBLE AS avg_start_percentile,
+                            AVG(d.last_p)::DOUBLE AS avg_end_percentile,
+                            -- Existing Momentum Metrics
+                            AVG(d.delta)::FLOAT AS avg_momentum,
+                            STDDEV(d.delta)::DOUBLE AS volatility,
+                            COUNT(DISTINCT d.team)::INTEGER AS team_count
+                        FROM team_event_deltas d
+                        JOIN frc.events e ON d.event_key = e.key
+                        WHERE e.event_type < 6
+                        GROUP BY ROLLUP (d.year, e.name)
+                        HAVING event_name != '_'
+                        ORDER BY d.year DESC, e.name;
+                    `);
+
+                    // 4. Parse and Render
+                    const configuredYaml = dashboardYaml.replace(
+                        /{{VIEW_NAME}}/g,
+                        viewName,
+                    );
+                    const spec = jsyaml.load(configuredYaml);
+                    const ast = parseSpec(spec);
+                    const { element } = await astToDOM(ast);
+
+                    container.innerHTML = "";
+                    container.appendChild(element);
+                } catch (e) {
+                    console.error("Data Load Error:", e);
+                    container.innerHTML = `<div style="color: red; padding: 1rem;">Error: ${e.message}</div>`;
+                } finally {
+                    spinner.style.display = "none";
+                }
+            }
+
+            init();
+        </script>
+    </body>
+</html>
