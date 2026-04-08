@@ -80,9 +80,14 @@ s3_client = boto3.client(
 client = httpx.Client(headers={"X-TBA-Auth-Key": TBA_KEY}, timeout=30.0)
 
 
-def upload_to_r2(df, key):
+def upload_to_r2(df, key, sort_by=None, row_group_size=None):
+    if sort_by:
+        df = df.sort(sort_by)
     buffer = BytesIO()
-    df.write_parquet(buffer)
+    write_kwargs = {}
+    if row_group_size:
+        write_kwargs["row_group_size"] = row_group_size
+    df.write_parquet(buffer, **write_kwargs)
     s3_client.put_object(Bucket=BUCKET_NAME, Key=key, Body=buffer.getvalue())
     print(f"Uploaded to {key}")
 
@@ -133,7 +138,7 @@ def backfill_events(year):
             combined = pl.concat([existing, new_df], how="diagonal_relaxed")
         else:
             combined = new_df
-        upload_to_r2(combined, "events/data.parquet")
+        upload_to_r2(combined, "events/data.parquet", sort_by="year", row_group_size=100_000)
 
 
 def fetch_event_matches(event_key, year):
@@ -205,7 +210,7 @@ def backfill_matches(year, parallel=False, max_workers=4):
             combined = pl.concat([existing, new_df], how="diagonal_relaxed")
         else:
             combined = new_df
-        upload_to_r2(combined, "matches/data.parquet")
+        upload_to_r2(combined, "matches/data.parquet", sort_by="year", row_group_size=100_000)
 
 
 def backfill_teams():
@@ -261,7 +266,7 @@ def consolidate_all():
                 print(f"  Missing {kind}/year={year}/data.parquet, skipping")
         if frames:
             consolidated = pl.concat(frames, how="diagonal_relaxed")
-            upload_to_r2(consolidated, f"{kind}/data.parquet")
+            upload_to_r2(consolidated, f"{kind}/data.parquet", sort_by="year", row_group_size=100_000)
             print(f"Consolidated {len(consolidated)} {kind} rows.")
 
 
