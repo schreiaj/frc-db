@@ -45,6 +45,10 @@ def create_pointer_db(output_path="data.db"):
     con.execute(f"CREATE OR REPLACE VIEW matches AS SELECT * FROM read_parquet('{base_url}/matches/data.parquet');")
     con.execute(f"CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('{base_url}/events/data.parquet');")
     con.execute(f"CREATE OR REPLACE VIEW teams AS SELECT * FROM read_parquet('{base_url}/teams/all_teams.parquet');")
+    try:
+        con.execute(f"CREATE OR REPLACE VIEW score_breakdowns AS SELECT * FROM read_parquet('{base_url}/score_breakdowns/data.parquet');")
+    except Exception:
+        print("score_breakdowns/data.parquet not found — skipping view (run --migrate-breakdowns first)")
 
     con.close()
     print(f"Pointer database created: {output_path}")

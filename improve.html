@@ -133,7 +133,12 @@
                     ATTACH 'https://frc-db.dev/data.db' AS frc (READ_ONLY);
                 `);
 
-                // 2. Dynamically pull years from your newly attached catalog
+                // 2. Cache the full matches file in memory once — year switches are then free.
+                await coord.exec(`
+                    CREATE OR REPLACE TEMP TABLE matches_cache AS SELECT * FROM frc.matches;
+                `);
+
+                // 3. Dynamically pull years from your newly attached catalog
                 const yearResult = await coord.query(`
                     SELECT DISTINCT year
                     FROM frc.events
@@ -179,29 +184,27 @@
                 try {
                     const viewName = `scores_${year}`;
 
-                    // 3. The Hybrid Query: Cache-friendly matches joined natively to events
+                    // 3. Materialize the parquet scan into a temp table first so the
+                    //    UNION ALL below reads from memory, not the remote file twice.
                     await coord.exec(`
-                        CREATE OR REPLACE TEMP TABLE ${viewName} AS
+                        CREATE TEMP TABLE IF NOT EXISTS base_${year} AS
+                            SELECT
+                                m.time, m.event_key, m.year, m.comp_level,
+                                m.red_teams, m.blue_teams,
+                                PERCENT_RANK() OVER (PARTITION BY m.year ORDER BY m.red_score ASC) * 100 AS red_percentile,
+                                PERCENT_RANK() OVER (PARTITION BY m.year ORDER BY m.blue_score ASC) * 100 AS blue_percentile
+                            FROM matches_cache m
+                            WHERE m.comp_level = 'qm'
+                            AND m.year = ${year};
+                    `);
+
+                    await coord.exec(`
+                        CREATE TEMP TABLE IF NOT EXISTS ${viewName} AS
                         WITH team_scores AS (
-                            -- 1. Calculate Percentile Rank for every alliance score within its Year
-                            SELECT
-                                m.time, m.event_key, m.year, m.comp_level,
-                                unnest(m.red_teams) AS team,
-                                PERCENT_RANK() OVER (PARTITION BY m.year ORDER BY m.red_score ASC) * 100 AS percentile
-                            FROM frc.matches m
-                            WHERE m.comp_level = 'qm'
-                            AND m.year ==${year}
-
-                            UNION ALL
-
-                            SELECT
-                                m.time, m.event_key, m.year, m.comp_level,
-                                unnest(m.blue_teams) AS team,
-                                PERCENT_RANK() OVER (PARTITION BY m.year ORDER BY m.blue_score ASC) * 100 AS percentile
-                            FROM frc.matches m
-                            WHERE m.comp_level = 'qm'
-                            AND m.year ==${year}
-                        ),
+                              SELECT time, event_key, year, comp_level, unnest(red_teams) AS team, red_percentile AS percentile FROM base_${year}
+                              UNION ALL
+                              SELECT time, event_key, year, comp_level, unnest(blue_teams) AS team, blue_percentile AS percentile FROM base_${year}
+                          ),
                         team_event_deltas AS (
                             -- 2. Calculate Start, End, and Delta (Momentum) for each team at each event
                             SELECT

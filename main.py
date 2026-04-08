@@ -41,6 +41,11 @@ MATCH_SCHEMA = {
     "red_score": pl.Int32,
     "blue_score": pl.Int32,
     "time": pl.Int64,  # Use Int64 to prevent overflow/underflow
+}
+
+SCORE_BREAKDOWN_SCHEMA = {
+    "key": pl.String,
+    "year": pl.Int32,
     "score_breakdown": pl.String,
 }
 
@@ -138,7 +143,7 @@ def backfill_events(year):
             combined = pl.concat([existing, new_df], how="diagonal_relaxed")
         else:
             combined = new_df
-        upload_to_r2(combined, "events/data.parquet", sort_by="year", row_group_size=100_000)
+        upload_to_r2(combined, "events/data.parquet", sort_by="year", row_group_size=2_000_000)
 
 
 def fetch_event_matches(event_key, year):
@@ -203,14 +208,24 @@ def backfill_matches(year, parallel=False, max_workers=4):
             time.sleep(0.05)
 
     if all_year_matches:
-        new_df = pl.DataFrame(all_year_matches, schema=MATCH_SCHEMA)
+        new_matches = pl.DataFrame(all_year_matches, schema=MATCH_SCHEMA)
+        new_breakdowns = pl.DataFrame(all_year_matches, schema=SCORE_BREAKDOWN_SCHEMA)
+
         existing = download_from_r2("matches/data.parquet")
         if existing is not None:
             existing = existing.filter(pl.col("year") != year)
-            combined = pl.concat([existing, new_df], how="diagonal_relaxed")
+            combined = pl.concat([existing, new_matches], how="diagonal_relaxed")
         else:
-            combined = new_df
-        upload_to_r2(combined, "matches/data.parquet", sort_by="year", row_group_size=100_000)
+            combined = new_matches
+        upload_to_r2(combined, "matches/data.parquet", sort_by="year", row_group_size=2_000_000)
+
+        existing_bd = download_from_r2("score_breakdowns/data.parquet")
+        if existing_bd is not None:
+            existing_bd = existing_bd.filter(pl.col("year") != year)
+            combined_bd = pl.concat([existing_bd, new_breakdowns], how="diagonal_relaxed")
+        else:
+            combined_bd = new_breakdowns
+        upload_to_r2(combined_bd, "score_breakdowns/data.parquet", sort_by="year", row_group_size=2_000_000)
 
 
 def backfill_teams():
@@ -251,6 +266,23 @@ def backfill_teams():
         print("No teams found to upload.")
 
 
+def migrate_breakdowns():
+    """One-time migration: extract score_breakdown from matches into score_breakdowns/data.parquet."""
+    print("Migrating score breakdowns...")
+    existing = download_from_r2("matches/data.parquet")
+    if existing is None:
+        print("No matches file found.")
+        return
+    if "score_breakdown" not in existing.columns:
+        print("score_breakdown already migrated.")
+        return
+    breakdowns = existing.select(["key", "year", "score_breakdown"])
+    upload_to_r2(breakdowns, "score_breakdowns/data.parquet", sort_by="year", row_group_size=2_000_000)
+    matches = existing.drop("score_breakdown")
+    upload_to_r2(matches, "matches/data.parquet", sort_by="year", row_group_size=2_000_000)
+    print("Migration complete.")
+
+
 def consolidate_all():
     """One-time migration: merge all year-partitioned files into single consolidated files."""
     years = range(2005, datetime.now().year + 1)
@@ -266,7 +298,7 @@ def consolidate_all():
                 print(f"  Missing {kind}/year={year}/data.parquet, skipping")
         if frames:
             consolidated = pl.concat(frames, how="diagonal_relaxed")
-            upload_to_r2(consolidated, f"{kind}/data.parquet", sort_by="year", row_group_size=100_000)
+            upload_to_r2(consolidated, f"{kind}/data.parquet", sort_by="year", row_group_size=2_000_000)
             print(f"Consolidated {len(consolidated)} {kind} rows.")
 
 
@@ -281,9 +313,12 @@ if __name__ == "__main__":
     parser.add_argument("--parallel", action="store_true", help="Fetch matches in parallel")
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
     parser.add_argument("--consolidate", action="store_true", help="One-time migration: merge all year-partitioned files into single consolidated files")
+    parser.add_argument("--migrate-breakdowns", action="store_true", help="One-time migration: extract score_breakdown from matches into score_breakdowns/data.parquet")
     args = parser.parse_args()
 
-    if args.consolidate:
+    if args.migrate_breakdowns:
+        migrate_breakdowns()
+    elif args.consolidate:
         consolidate_all()
     elif args.teams:
         backfill_teams()
