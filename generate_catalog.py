@@ -39,22 +39,12 @@ def create_pointer_db(output_path="data.db"):
     con.execute("INSTALL httpfs; LOAD httpfs;")
 
     base_url = "https://frc-db.dev"
-    years = range(2005, 2027)
-
-    match_urls = [f"'{base_url}/matches/year={y}/data.parquet'" for y in years]
-    event_urls = [f"'{base_url}/events/year={y}/data.parquet'" for y in years]
 
     print("Defining virtual views...")
 
-    # Using simple strings to avoid hidden character traps in triple-quotes
-    matches_sql = f"CREATE OR REPLACE VIEW matches AS SELECT * FROM read_parquet([{', '.join(match_urls)}], union_by_name = true);"
-    con.execute(matches_sql)
-
-    events_sql = f"CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet([{', '.join(event_urls)}], union_by_name = true);"
-    con.execute(events_sql)
-
-    teams_sql = f"CREATE OR REPLACE VIEW teams AS SELECT * FROM read_parquet('{base_url}/teams/all_teams.parquet');"
-    con.execute(teams_sql)
+    con.execute(f"CREATE OR REPLACE VIEW matches AS SELECT * FROM read_parquet('{base_url}/matches/data.parquet');")
+    con.execute(f"CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('{base_url}/events/data.parquet');")
+    con.execute(f"CREATE OR REPLACE VIEW teams AS SELECT * FROM read_parquet('{base_url}/teams/all_teams.parquet');")
 
     con.close()
     print(f"Pointer database created: {output_path}")

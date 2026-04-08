@@ -87,6 +87,19 @@ def upload_to_r2(df, key):
     print(f"Uploaded to {key}")
 
 
+def download_from_r2(key: str) -> pl.DataFrame | None:
+    buffer = BytesIO()
+    try:
+        s3_client.download_fileobj(Bucket=BUCKET_NAME, Key=key, Fileobj=buffer)
+    except s3_client.exceptions.ClientError as e:
+        if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+            print(f"No existing file at {key}, starting fresh.")
+            return None
+        raise
+    buffer.seek(0)
+    return pl.read_parquet(buffer)
+
+
 def backfill_events(year):
     print(f"Fetching events for {year}...")
     res = client.get(f"https://www.thebluealliance.com/api/v3/events/{year}")
@@ -113,8 +126,14 @@ def backfill_events(year):
         )
 
     if event_list:
-        df = pl.DataFrame(event_list, schema=EVENT_SCHEMA)
-        upload_to_r2(df, f"events/year={year}/data.parquet")
+        new_df = pl.DataFrame(event_list, schema=EVENT_SCHEMA)
+        existing = download_from_r2("events/data.parquet")
+        if existing is not None:
+            existing = existing.filter(pl.col("year") != year)
+            combined = pl.concat([existing, new_df], how="diagonal_relaxed")
+        else:
+            combined = new_df
+        upload_to_r2(combined, "events/data.parquet")
 
 
 def fetch_event_matches(event_key, year):
@@ -179,9 +198,14 @@ def backfill_matches(year, parallel=False, max_workers=4):
             time.sleep(0.05)
 
     if all_year_matches:
-        # Use Explicit Schema (Option 2)
-        df = pl.DataFrame(all_year_matches, schema=MATCH_SCHEMA)
-        upload_to_r2(df, f"matches/year={year}/data.parquet")
+        new_df = pl.DataFrame(all_year_matches, schema=MATCH_SCHEMA)
+        existing = download_from_r2("matches/data.parquet")
+        if existing is not None:
+            existing = existing.filter(pl.col("year") != year)
+            combined = pl.concat([existing, new_df], how="diagonal_relaxed")
+        else:
+            combined = new_df
+        upload_to_r2(combined, "matches/data.parquet")
 
 
 def backfill_teams():
@@ -222,6 +246,25 @@ def backfill_teams():
         print("No teams found to upload.")
 
 
+def consolidate_all():
+    """One-time migration: merge all year-partitioned files into single consolidated files."""
+    years = range(2005, datetime.now().year + 1)
+    for kind in ("events", "matches"):
+        print(f"Consolidating {kind}...")
+        frames = []
+        for year in years:
+            df = download_from_r2(f"{kind}/year={year}/data.parquet")
+            if df is not None:
+                print(f"  Loaded {kind}/year={year}/data.parquet ({len(df)} rows)")
+                frames.append(df)
+            else:
+                print(f"  Missing {kind}/year={year}/data.parquet, skipping")
+        if frames:
+            consolidated = pl.concat(frames, how="diagonal_relaxed")
+            upload_to_r2(consolidated, f"{kind}/data.parquet")
+            print(f"Consolidated {len(consolidated)} {kind} rows.")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--start", type=int, help="Start year for backfill")
@@ -232,9 +275,12 @@ if __name__ == "__main__":
     parser.add_argument("--teams", action="store_true", help="Export teams")
     parser.add_argument("--parallel", action="store_true", help="Fetch matches in parallel")
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
+    parser.add_argument("--consolidate", action="store_true", help="One-time migration: merge all year-partitioned files into single consolidated files")
     args = parser.parse_args()
 
-    if args.teams:
+    if args.consolidate:
+        consolidate_all()
+    elif args.teams:
         backfill_teams()
 
     elif args.current_year_only:

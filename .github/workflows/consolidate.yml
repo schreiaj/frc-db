@@ -1,28 +1,19 @@
-name: Manual Backfill
+name: One-Time Consolidation
 on:
   workflow_dispatch:
-    inputs:
-      start_year:
-        description: "Year to start from"
-        required: true
-        default: "2005"
-      end_year:
-        description: "Year to end at"
-        required: true
-        default: "2025"
 
 jobs:
-  backfill:
+  consolidate:
     runs-on: ubuntu-latest
     environment: prod
     steps:
       - uses: actions/checkout@v4
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Run Backfill
-        run: |
-          uv run python main.py --start ${{ github.event.inputs.start_year }} --end ${{ github.event.inputs.end_year }}
+      - name: Consolidate Parquet Files
+        run: uv run python main.py --consolidate
         env:
           TBA_KEY: ${{ secrets.TBA_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
