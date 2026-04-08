@@ -45,10 +45,26 @@ def create_pointer_db(output_path="data.db"):
     con.execute(f"CREATE OR REPLACE VIEW matches AS SELECT * FROM read_parquet('{base_url}/matches/data.parquet');")
     con.execute(f"CREATE OR REPLACE VIEW events AS SELECT * FROM read_parquet('{base_url}/events/data.parquet');")
     con.execute(f"CREATE OR REPLACE VIEW teams AS SELECT * FROM read_parquet('{base_url}/teams/all_teams.parquet');")
-    try:
-        con.execute(f"CREATE OR REPLACE VIEW score_breakdowns AS SELECT * FROM read_parquet('{base_url}/score_breakdowns/data.parquet');")
-    except Exception:
-        print("score_breakdowns/data.parquet not found — skipping view (run --migrate-breakdowns first)")
+
+    for key, label in [("score_breakdowns", "--migrate-breakdowns"), ("awards", "--start/--end"), ("award_types", "--start/--end")]:
+        try:
+            con.execute(f"CREATE OR REPLACE VIEW {key} AS SELECT * FROM read_parquet('{base_url}/{key}/data.parquet');")
+        except Exception:
+            print(f"{key}/data.parquet not found — skipping view (run {label} first)")
+
+    con.execute("""
+        CREATE OR REPLACE VIEW event_types AS
+        SELECT * FROM (VALUES
+            (0, 'Regional'),
+            (1, 'District'),
+            (2, 'District Championship'),
+            (3, 'Championship Division'),
+            (4, 'Championship Finals'),
+            (5, 'District Championship Division'),
+            (6, 'Festival of Champions'),
+            (7, 'Remote')
+        ) t(event_type, label);
+    """)
 
     con.close()
     print(f"Pointer database created: {output_path}")

@@ -39,25 +39,33 @@ This project provides a **Serverless SQL Interface** to the historical records o
 
 ### The Tech Stack
 * **Extraction:** A Python/Polars pipeline (running on GitHub Actions) translates TBA records into flat, analytical Parquet files.
-* **Storage:** Data is hosted on **Cloudflare R2**. 
-* **Organization:** Matches and events are **Hive-partitioned** by `year` (e.g., `/matches/year=2026/data.parquet`).
-* **The Engine:** **DuckDB** uses **HTTP Range Requests** to download only the specific columns or rows required for your query, making it incredibly bandwidth-efficient.
+* **Storage:** Data is hosted on **Cloudflare R2**.
+* **Organization:** Each dataset is a single consolidated Parquet file (e.g., `matches/data.parquet`) loaded into DuckDB via HTTP range requests.
+* **The Engine:** **DuckDB** reads only the columns required for your query, making it bandwidth-efficient across the full history of FRC.
 
 ### When to use this vs. the TBA API:
 * **Aggregations:** If you need to calculate "all-time" stats or trends over decades.
-* **Complex Joins:** Combine `matches`, `events`, and `teams` in a single SQL statement.
-* **JSON Analysis:** Scoring rules change annually; the `score_breakdown` column is preserved as a JSON string for on-the-fly parsing:
+* **Complex Joins:** Combine `matches`, `events`, `teams`, and `awards` in a single SQL statement.
+* **JSON Analysis:** Scoring rules change annually; `score_breakdown` is preserved as a JSON string in `frc.score_breakdowns` for on-the-fly parsing:
   ```sql
-  SELECT avg((score_breakdown->>'$.red.autoPoints')::INT) 
-  FROM frc.matches 
-  WHERE year = 2024;
+  SELECT avg((sb.score_breakdown->>'$.red.autoPoints')::INT)
+  FROM frc.score_breakdowns sb
+  WHERE sb.year = 2024;
   ```
 
 ---
 
 ## Exported Data
 
-Currently we only provide Team, Event, and Match data and don't include things like Districts or Awards (though this is likely coming next) If you need District data or other things TBA provides, file an issue or better yet a PR. 
+| Table | Description |
+|---|---|
+| `frc.matches` | All qualification and playoff match results |
+| `frc.events` | Event metadata (name, location, type, dates) |
+| `frc.teams` | Team roster (number, name, location, rookie year) |
+| `frc.awards` | Award recipients per event (team and individual) |
+| `frc.score_breakdowns` | Per-match scoring detail as JSON, joined to `matches` on `key` |
+| `frc.award_types` | Enum mapping `award_type` integer to name |
+| `frc.event_types` | Enum mapping `event_type` integer to label |
 
 
 ## 📊 Sample Queries
@@ -74,9 +82,28 @@ GROUP BY ALL;
 
 ### Get all teams in a specific city
 ```sql
-SELECT team_number, nickname, rookie_year 
-FROM frc.teams 
+SELECT team_number, nickname, rookie_year
+FROM frc.teams
 WHERE city = 'Boston' AND state_prov = 'MA';
+```
+
+### Find every Chairman's Award winner
+```sql
+SELECT a.year, a.event_key, a.team_key
+FROM frc.awards a
+JOIN frc.award_types at ON a.award_type = at.award_type
+WHERE at.name ILIKE '%chairman%'
+ORDER BY a.year DESC;
+```
+
+### Count awards won by a team all-time
+```sql
+SELECT at.name, count(*) AS times_won
+FROM frc.awards a
+JOIN frc.award_types at ON a.award_type = at.award_type
+WHERE a.team_key = 'frc254'
+GROUP BY at.name
+ORDER BY times_won DESC;
 ```
 
 ---

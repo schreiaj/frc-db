@@ -49,6 +49,20 @@ SCORE_BREAKDOWN_SCHEMA = {
     "score_breakdown": pl.String,
 }
 
+AWARD_SCHEMA = {
+    "event_key": pl.String,
+    "year": pl.Int32,
+    "award_type": pl.Int32,
+    "name": pl.String,
+    "team_key": pl.String,
+    "awardee": pl.String,
+}
+
+AWARD_TYPE_SCHEMA = {
+    "award_type": pl.Int32,
+    "name": pl.String,
+}
+
 EVENT_SCHEMA = {
     "key": pl.String,
     "name": pl.String,
@@ -228,6 +242,72 @@ def backfill_matches(year, parallel=False, max_workers=4):
         upload_to_r2(combined_bd, "score_breakdowns/data.parquet", sort_by="year", row_group_size=2_000_000)
 
 
+def fetch_event_awards(event_key, year):
+    """Fetch and parse awards for a single event."""
+    res = client.get(f"https://www.thebluealliance.com/api/v3/event/{event_key}/awards")
+    awards = res.json()
+    if not awards:
+        return []
+
+    parsed = []
+    for a in awards:
+        for recipient in a.get("recipient_list", []):
+            parsed.append({
+                "event_key": event_key,
+                "year": year,
+                "award_type": a["award_type"],
+                "name": sanitize_str(a["name"]),
+                "team_key": recipient.get("team_key"),
+                "awardee": sanitize_str(recipient.get("awardee")),
+            })
+    return parsed
+
+
+def backfill_awards(year, parallel=False, max_workers=4):
+    print(f"Processing awards for {year}...")
+    events_res = client.get(f"https://www.thebluealliance.com/api/v3/events/{year}/simple")
+    event_keys = [e["key"] for e in events_res.json()]
+
+    all_awards = []
+
+    if parallel:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(fetch_event_awards, ek, year): ek
+                for ek in event_keys
+            }
+            for future in as_completed(futures):
+                all_awards.extend(future.result())
+    else:
+        for event_key in event_keys:
+            all_awards.extend(fetch_event_awards(event_key, year))
+            time.sleep(0.05)
+
+    if all_awards:
+        new_awards = pl.DataFrame(all_awards, schema=AWARD_SCHEMA)
+
+        existing = download_from_r2("awards/data.parquet")
+        if existing is not None:
+            existing = existing.filter(pl.col("year") != year)
+            combined = pl.concat([existing, new_awards], how="diagonal_relaxed")
+        else:
+            combined = new_awards
+        upload_to_r2(combined, "awards/data.parquet", sort_by="year", row_group_size=2_000_000)
+
+        # award_types is a global enum — merge new types, never drop old ones
+        new_types = new_awards.select(["award_type", "name"]).unique(subset=["award_type"])
+        existing_types = download_from_r2("award_types/data.parquet")
+        if existing_types is not None:
+            combined_types = (
+                pl.concat([existing_types, new_types])
+                .unique(subset=["award_type"], keep="first")
+                .sort("award_type")
+            )
+        else:
+            combined_types = new_types.sort("award_type")
+        upload_to_r2(combined_types, "award_types/data.parquet")
+
+
 def backfill_teams():
     """Iterates through TBA team pages until no more teams are found."""
     print("Fetching all teams from TBA...")
@@ -327,9 +407,11 @@ if __name__ == "__main__":
         current_year = datetime.now().year
         backfill_events(current_year)
         backfill_matches(current_year, parallel=args.parallel, max_workers=args.workers)
+        backfill_awards(current_year, parallel=args.parallel, max_workers=args.workers)
     elif args.start and args.end:
         for year in range(args.start, args.end + 1):
             backfill_events(year)
             backfill_matches(year, parallel=args.parallel, max_workers=args.workers)
+            backfill_awards(year, parallel=args.parallel, max_workers=args.workers)
     else:
         print("Please provide --start and --end, or use --current-year-only")

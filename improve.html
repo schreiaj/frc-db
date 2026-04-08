@@ -130,6 +130,7 @@
                 // 1. Pure DuckDB setup. No SQLite needed.
                 await coord.exec(`
                     INSTALL httpfs; LOAD httpfs;
+                    SET unsafe_disable_etag_checks = true;
                     ATTACH 'https://frc-db.dev/data.db' AS frc (READ_ONLY);
                 `);
 
