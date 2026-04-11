@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>FRC 2026 - Sounding Chart</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+        <style>
+            body {
+                font-family: system-ui, sans-serif;
+                padding: 2rem;
+                background: #f4f4f9;
+            }
+            .dashboard-card {
+                background: white;
+                padding: 2rem;
+                border-radius: 12px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+                max-width: 900px;
+                margin: auto;
+                margin-bottom: 1rem;
+            }
+            .header-info {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 2rem;
+                padding-bottom: 1rem;
+                border-bottom: 1px solid #eee;
+            }
+            h2 {
+                margin: 0;
+            }
+            .controls {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            input {
+                padding: 6px 10px;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                outline: none;
+            }
+            input:focus {
+                border-color: #3b82f6;
+            }
+            .spinner {
+                color: #666;
+                font-size: 0.9rem;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="dashboard-card">
+            <div class="header-info">
+                <h2>Alliance Scores Deltas Over Match Phase — 2026</h2>
+                <div class="controls">
+                    <label for="team-input">Team:</label>
+                    <input
+                        type="text"
+                        id="team-input"
+                        placeholder="e.g. frc125"
+                    />
+                    <label for="match-input">Match/Event:</label>
+                    <input
+                        type="text"
+                        id="match-input"
+                        placeholder="e.g. 2026cmp"
+                    />
+                </div>
+                <span class="spinner" id="loading-spinner">Loading…</span>
+            </div>
+            <div id="charts-container"></div>
+        </div>
+
+        <div class="dashboard-card">
+            <div class="header-info">
+                <h2>How to Read This Chart</h2>
+            </div>
+            <div style="line-height: 1.7; color: #444; max-width: 680px">
+                <p>
+                    This is a <strong>sounding chart</strong> — named after the
+                    nautical practice of measuring depth at successive points
+                    along a voyage. Each line traces a single alliance through
+                    the phases of a match, showing how their score advantage or
+                    disadvantage evolved over the match.
+                </p>
+                <p>
+                    The <strong>vertical axis</strong> is match phase, ordered
+                    from bottom to top: Initial → Auto → Transition → 1st Shift
+                    → 2nd Shift → Final. The <strong>horizontal axis</strong> is
+                    score differential — how many points ahead (positive) or
+                    behind (negative) that alliance was at the end of each
+                    phase. All matches start at zero.
+                </p>
+                <p>
+                    <span style="color: #ef4444; font-weight: 600"
+                        >Red lines</span
+                    >
+                    trace the red alliance;
+                    <span style="color: #3b82f6; font-weight: 600"
+                        >blue lines</span
+                    >
+                    trace the blue alliance. Because the differential is always
+                    mirrored (red's lead is blue's deficit), the two lines for
+                    any given match are reflections of each other across zero.
+                </p>
+                <p>
+                    <strong>Filters:</strong> Use the <em>Team</em> box to
+                    isolate matches a specific team played in. Use the
+                    <em>Match/Event</em> box to narrow to a single event (e.g.
+                    <code>2026cmp</code>) or a specific match key. You can also
+                    find just qualifying matches with <code>qf</code> The
+                    histogram below the sounding chart shows the distribution of
+                    alliance scores — drag to brush a score range and the
+                    sounding chart will update to show only matches that fall
+                    within it.
+                </p>
+            </div>
+        </div>
+
+        <script type="module">
+            import * as vg from "https://cdn.jsdelivr.net/npm/@uwdata/vgplot/+esm";
+            import {
+                parseSpec,
+                astToDOM,
+            } from "https://cdn.jsdelivr.net/npm/@uwdata/mosaic-spec/+esm";
+
+            const coord = vg.coordinator();
+            const container = document.getElementById("charts-container");
+            const spinner = document.getElementById("loading-spinner");
+            let mosaicParams = null;
+
+            // total_score is the alliance's final score for the match —
+            // used by the histogram crossfilter so brushing filters the sounding chart
+            // to only show matches in that final-score range.
+            const dashboardYaml = `
+              params:
+                brush: { select: crossfilter }
+                team_select: { select: intersect }
+                active_filters: { select: intersect, include: [$brush, $team_select] }
+
+              vconcat:
+                - plot:
+                    - mark: line
+                      data: { from: sounding_2026_sample, filterBy: $active_filters }
+                      x: delta
+                      y: stage_name
+                      z: match_key
+                      stroke: alliance
+                      curve: monotone-y
+                      strokeWidth: 1
+                      tip: true
+                      opacity: .5
+                      channels:
+                        Match: match_key
+
+                  colorDomain: [Red, Blue]
+                  colorRange: ["#ef4444", "#3b82f6"]
+                  xDomain: [-400, 400]
+                  yDomain: ["Final", "2nd Shift", "1st Shift", "Transition", "Auto", "Initial"]
+                  width: 700
+                  height: 500
+                  marginLeft: 120
+                  marginTop: 40
+                  marginRight: 20
+                  marginBottom: 20
+
+                - plot:
+                    - mark: rectY
+                      data: { from: sounding_2026 }
+                      x: { bin: total_score }
+                      y: { count: true }
+                      fill: lightgray
+                      inset: 0.5
+                    - select: intervalX
+                      as: $brush
+                  xGrid: true
+                  xLabel: "Total Alliance Score"
+                  yLabel: "Matches"
+                  width: 700
+                  height: 150
+                  marginLeft: 120
+                  marginRight: 20
+            `;
+
+            async function init() {
+                await coord.databaseConnector(vg.wasmConnector());
+
+                await coord.exec(`
+                    INSTALL httpfs; LOAD httpfs;
+                    SET unsafe_disable_etag_checks = true;
+                    ATTACH 'https://frc-db.dev/data.db' AS frc (READ_ONLY);
+                `);
+
+                const teamVal = document.getElementById("team-input").value;
+                const teamFilterSql = !teamVal
+                    ? "1=1"
+                    : `(list_contains(m.red_teams, '${teamVal}') OR list_contains(m.blue_teams, '${teamVal}'))`;
+
+                await coord.exec(`
+                    CREATE OR REPLACE TEMP TABLE sounding_2026 AS
+                    WITH MatchStages AS (
+                        SELECT
+                            sb.key AS match,
+                            m.comp_level,
+                            e.key as event,
+                            unnest(ARRAY[1, 2, 3, 4, 5]) as stage_order,
+                            unnest(ARRAY['Initial', 'Auto', 'Transition', '1st Shift', '2nd Shift', 'Final']) as stage_name,
+                            unnest(ARRAY[
+                                0,
+                                (sb.score_breakdown->'red'->'hubScore'->>'autoPoints')::INT,
+                                (sb.score_breakdown->'red'->'hubScore'->>'transitionPoints')::INT,
+                                (sb.score_breakdown->'red'->'hubScore'->>'shift1Points')::INT + (sb.score_breakdown->'red'->'hubScore'->>'shift2Points')::INT,
+                                (sb.score_breakdown->'red'->'hubScore'->>'shift3Points')::INT + (sb.score_breakdown->'red'->'hubScore'->>'shift4Points')::INT,
+                                0
+                            ]) as r_inc,
+                            unnest(ARRAY[
+                                0,
+                                (sb.score_breakdown->'blue'->'hubScore'->>'autoPoints')::INT,
+                                (sb.score_breakdown->'blue'->'hubScore'->>'transitionPoints')::INT,
+                                (sb.score_breakdown->'blue'->'hubScore'->>'shift1Points')::INT + (sb.score_breakdown->'blue'->'hubScore'->>'shift2Points')::INT,
+                                (sb.score_breakdown->'blue'->'hubScore'->>'shift3Points')::INT + (sb.score_breakdown->'blue'->'hubScore'->>'shift4Points')::INT,
+                                0
+                            ]) as b_inc,
+                            (sb.score_breakdown->'red'->>'totalPoints')::INT AS r_final,
+                            (sb.score_breakdown->'blue'->>'totalPoints')::INT AS b_final,
+                            m.red_teams, m.blue_teams
+                        FROM frc.score_breakdowns sb
+                        JOIN frc.matches m ON m.key = sb.key
+                        JOIN frc.events e ON e.key = m.event_key
+                        WHERE sb.year = 2026
+                        -- AND comp_level != 'qm'
+                        AND red_score > 0
+                        AND blue_score >0
+                        AND ${teamFilterSql}
+                    ),
+                    CalculatedTotals AS (
+                        SELECT
+                            match,red_teams, blue_teams, event, stage_name, stage_order, comp_level,
+                            CASE WHEN stage_name = 'Final' THEN r_final ELSE SUM(r_inc) OVER (PARTITION BY match ORDER BY stage_order) END as red_score,
+                            CASE WHEN stage_name = 'Final' THEN b_final ELSE SUM(b_inc) OVER (PARTITION BY match ORDER BY stage_order) END as blue_score,
+                            r_final,
+                            b_final
+                        FROM MatchStages
+                    )
+                    SELECT comp_level, red_teams as teams, match, event, stage_name, stage_order, 'Red' as alliance, match || '_Red' AS match_key, red_score as score, blue_score as other_score, score-other_score as delta, r_final as total_score FROM CalculatedTotals
+                    UNION ALL
+                    SELECT comp_level, blue_teams as teams, match, event, stage_name, stage_order, 'Blue' as alliance, match || '_Blue' AS match_key, blue_score as score, red_score as other_score, score-other_score as delta, b_final as total_score FROM CalculatedTotals
+                    ORDER BY match, stage_order;
+                `);
+
+                // 10% sample at the match level so sounding lines are complete traces
+                await coord.exec(`
+                    CREATE OR REPLACE TEMP TABLE sounding_2026_sample AS
+                    SELECT s.* FROM sounding_2026 s
+                    WHERE s.match IN (
+                        SELECT match FROM (SELECT DISTINCT match FROM sounding_2026) USING SAMPLE 100%
+                    );
+                `);
+
+                try {
+                    const spec = jsyaml.load(dashboardYaml);
+                    const ast = parseSpec(spec);
+                    const { element, params } = await astToDOM(ast);
+                    mosaicParams = params;
+                    container.innerHTML = "";
+                    container.appendChild(element);
+                } catch (e) {
+                    console.error("Render Error:", e);
+                    container.innerHTML = `<div style="color: red; padding: 1rem;">Error: ${e.message}</div>`;
+                } finally {
+                    spinner.style.display = "none";
+                }
+            }
+            const qp = new URLSearchParams(window.location.search);
+            const teamRaw = qp.get("team") ?? "";
+            const matchRaw = qp.get("match") ?? "";
+
+            let activeTeam = teamRaw
+                ? teamRaw.startsWith("frc")
+                    ? teamRaw
+                    : "frc" + teamRaw
+                : null;
+            let activeMatch = matchRaw || null;
+
+            // Pre-fill inputs
+            if (activeTeam)
+                document.getElementById("team-input").value = activeTeam;
+            if (activeMatch)
+                document.getElementById("match-input").value = activeMatch;
+
+            function applyTextFilters() {
+                const sel = mosaicParams?.get("team_select");
+                if (!sel) return;
+                const parts = [];
+                if (activeTeam)
+                    parts.push(`list_contains(teams, '${activeTeam}')`);
+                if (activeMatch)
+                    parts.push(
+                        `(match LIKE '%${activeMatch}%' OR event LIKE '%${activeMatch}%')`,
+                    );
+                sel.update({
+                    source: null,
+                    predicate: parts.length ? parts.join(" AND ") : null,
+                });
+            }
+
+            document
+                .getElementById("team-input")
+                .addEventListener("input", (e) => {
+                    const val = e.target.value.trim();
+                    activeTeam = val
+                        ? val.startsWith("frc")
+                            ? val
+                            : "frc" + val
+                        : null;
+                    applyTextFilters();
+                });
+
+            document
+                .getElementById("match-input")
+                .addEventListener("input", (e) => {
+                    activeMatch = e.target.value.trim() || null;
+                    applyTextFilters();
+                });
+
+            init().then(applyTextFilters);
+        </script>
+    </body>
+</html>
