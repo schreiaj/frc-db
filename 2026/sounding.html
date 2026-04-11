@@ -193,11 +193,6 @@
                     ATTACH 'https://frc-db.dev/data.db' AS frc (READ_ONLY);
                 `);
 
-                const teamVal = document.getElementById("team-input").value;
-                const teamFilterSql = !teamVal
-                    ? "1=1"
-                    : `(list_contains(m.red_teams, '${teamVal}') OR list_contains(m.blue_teams, '${teamVal}'))`;
-
                 await coord.exec(`
                     CREATE OR REPLACE TEMP TABLE sounding_2026 AS
                     WITH MatchStages AS (
@@ -232,8 +227,7 @@
                         WHERE sb.year = 2026
                         -- AND comp_level != 'qm'
                         AND red_score > 0
-                        AND blue_score >0
-                        AND ${teamFilterSql}
+                        AND blue_score > 0
                     ),
                     CalculatedTotals AS (
                         SELECT
