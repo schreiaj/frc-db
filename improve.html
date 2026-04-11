@@ -196,6 +196,7 @@
                                 PERCENT_RANK() OVER (PARTITION BY m.year ORDER BY m.blue_score ASC) * 100 AS blue_percentile
                             FROM matches_cache m
                             WHERE m.comp_level = 'qm'
+                            AND red_score >=0 AND blue_score >= 0
                             AND m.year = ${year};
                     `);
 

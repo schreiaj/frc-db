@@ -184,7 +184,7 @@
                     await coord.exec(`
                         CREATE OR REPLACE TEMP TABLE ${viewName} AS
                         WITH match_data AS (
-                            SELECT greatest(red_score, blue_score) AS score, comp_level, event_key FROM frc.matches WHERE year = ${year}
+                            SELECT greatest(red_score, blue_score) AS score, comp_level, event_key FROM frc.matches WHERE year = ${year} AND red_score >=0 AND blue_score >= 0
                         )
                         SELECT
                             m.score,
