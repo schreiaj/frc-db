@@ -22,10 +22,7 @@
     <body class="share">
         <a id="watermark" href="https://frc-db.dev" target="_blank">frc-db.dev</a>
         <div class="preview">
-            <mosaic-viz
-                id="viz"
-                properties='{"VIEW_NAME":"scores","YEAR":2026}'
-            ></mosaic-viz>
+            <mosaic-viz id="viz"></mosaic-viz>
         </div>
 
         <script>
@@ -33,11 +30,14 @@
                 const params = new URLSearchParams(window.location.search);
                 const el = document.getElementById("viz");
 
-                const sql = params.get("sql");
-                const viz = params.get("viz");
+                const sql    = params.get("sql");
+                const viz    = params.get("viz");
+                const props  = params.get("params");
 
-                if (sql) el.setAttribute("query",      LZString.decompressFromEncodedURIComponent(sql));
-                if (viz) el.setAttribute("viz",        LZString.decompressFromEncodedURIComponent(viz));
+                const d = (v) => LZString.decompressFromEncodedURIComponent(v);
+                if (sql)   el.setAttribute("query",      d(sql));
+                if (viz)   el.setAttribute("viz",        d(viz));
+                if (props) el.setAttribute("properties", d(props));
 
                 if (!sql && !viz) {
                     el.innerHTML = "<p style='color:#888;padding:1rem'>No viz specified. Open this page from the <a href='viz-builder.html'>builder</a>.</p>";

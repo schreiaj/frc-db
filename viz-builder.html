@@ -26,7 +26,7 @@
 
         <div class="panel">
             <div class="editor-block">
-                <div class="editor-label">SQL</div>
+                <div class="editor-label">SQL <i class="chevron">▾</i></div>
                 <textarea
                     data-bind:sql
                     data-effect="updateQueryParam('sql', LZString.compressToEncodedURIComponent($sql))"
@@ -35,10 +35,19 @@
             </div>
 
             <div class="editor-block">
-                <div class="editor-label">Viz Spec (JSON)</div>
+                <div class="editor-label">Viz Spec (JSON) <i class="chevron">▾</i></div>
                 <textarea
                     data-bind:viz
                     data-effect="updateQueryParam('viz', LZString.compressToEncodedURIComponent($viz))"
+                    spellcheck="false"
+                ></textarea>
+            </div>
+
+            <div class="editor-block">
+                <div class="editor-label">Params (JSON) <i class="chevron">▾</i></div>
+                <textarea
+                    data-bind:params
+                    data-effect="updateQueryParam('params', LZString.compressToEncodedURIComponent($params))"
                     spellcheck="false"
                 ></textarea>
             </div>
@@ -66,6 +75,12 @@ FROM match_data m
 JOIN frc.events e  ON m.event_key = e.key
 JOIN event_type_enum et ON e.event_type = et.id
 WHERE e.event_type < 6;`;
+
+            const DEFAULT_PARAMS =
+`{
+  "VIEW_NAME": "scores",
+  "YEAR": 2026
+}`;
 
             const DEFAULT_VIZ =
 `{
@@ -141,13 +156,16 @@ WHERE e.event_type < 6;`;
                     params.get('sql') ? decompress(params.get('sql')) : DEFAULT_SQL;
                 document.querySelector('[data-bind\\:viz]').value =
                     params.get('viz') ? decompress(params.get('viz')) : DEFAULT_VIZ;
+                document.querySelector('[data-bind\\:params]').value =
+                    params.get('params') ? decompress(params.get('params')) : DEFAULT_PARAMS;
             })();
 
             document.getElementById('share-btn').addEventListener('click', function (e) {
                 e.preventDefault();
-                const sql = document.querySelector('[data-bind\\:sql]').value;
-                const viz = document.querySelector('[data-bind\\:viz]').value;
-                const url = `share.html?sql=${LZString.compressToEncodedURIComponent(sql)}&viz=${LZString.compressToEncodedURIComponent(viz)}`;
+                const sql    = document.querySelector('[data-bind\\:sql]').value;
+                const viz    = document.querySelector('[data-bind\\:viz]').value;
+                const params = document.querySelector('[data-bind\\:params]').value;
+                const url = `share.html?sql=${LZString.compressToEncodedURIComponent(sql)}&viz=${LZString.compressToEncodedURIComponent(viz)}&params=${LZString.compressToEncodedURIComponent(params)}`;
                 window.open(url, '_blank');
             });
         </script>
@@ -155,12 +173,19 @@ WHERE e.event_type < 6;`;
         <div class="preview">
             <mosaic-viz
                 id="score-viz"
-                properties='{"VIEW_NAME":"scores","YEAR":2026}'
+                data-attr:properties="$params"
                 data-attr:query="$sql"
-                query="ATTACH IF NOT EXISTS 'https://frc-db.dev/data.db' AS frc (READ_ONLY);"
                 data-attr:viz="$viz"
             ></mosaic-viz>
         </div>
+
+        <script>
+            document.querySelectorAll('.editor-label').forEach(label => {
+                label.addEventListener('click', () => {
+                    label.closest('.editor-block').classList.toggle('collapsed');
+                });
+            });
+        </script>
 
         <script>
             function updateQueryParam(key, value) {

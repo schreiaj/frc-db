@@ -105,8 +105,11 @@ body.builder {
     flex: 1;
     min-height: 0;
     border-bottom: 1px solid var(--border);
+    transition: flex 0.2s ease;
 }
 .editor-block:last-child { border-bottom: none; }
+.editor-block.collapsed { flex: 0; min-height: min-content; }
+.editor-block.collapsed textarea { display: none; }
 
 .editor-label {
     font-size: 0.7rem;
@@ -118,6 +121,19 @@ body.builder {
     background: var(--surface-alt);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+}
+.editor-label:hover { color: var(--text); }
+.editor-label .chevron {
+    font-style: normal;
+    transition: transform 0.2s ease;
+}
+.editor-block.collapsed .editor-label .chevron {
+    transform: rotate(-90deg);
 }
 
 textarea {
