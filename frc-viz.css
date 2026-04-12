@@ -1,0 +1,150 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+/* ── colour tokens ── */
+:root {
+    --bg:          #0f1117;
+    --surface:     #161b27;
+    --surface-alt: #1e2535;
+    --border:      #2d3748;
+    --text:        #e2e8f0;
+    --text-muted:  #64748b;
+    --text-heading:#f0f4ff;
+    --code:        #a8c3f7;
+    --selection:   #2d4a7a;
+    --accent:      #3b82f6;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg:          #f4f4f9;
+        --surface:     #ffffff;
+        --surface-alt: #f1f5f9;
+        --border:      #e2e8f0;
+        --text:        #1e293b;
+        --text-muted:  #64748b;
+        --text-heading:#0f172a;
+        --code:        #1e40af;
+        --selection:   #bfdbfe;
+        --accent:      #2563eb;
+    }
+}
+
+/* ── shared base ── */
+body {
+    font-family: system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+}
+
+mosaic-viz { display: block; }
+
+/* ── header (builder + share) ── */
+header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 1.25rem;
+    height: 48px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+header h1 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-heading);
+    margin: 0;
+}
+header span {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+header .spacer { flex: 1; }
+
+#share-btn {
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.3rem 0.85rem;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+}
+#share-btn:hover { background: var(--accent); color: #fff; }
+
+/* ── preview panel (builder right + share full page) ── */
+.preview {
+    overflow: auto;
+    padding: 1.5rem;
+    background: var(--bg);
+}
+
+/* ── builder-specific layout ── */
+body.builder {
+    height: 100vh;
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    grid-template-rows: 48px 1fr;
+    overflow: hidden;
+}
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.editor-block {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    border-bottom: 1px solid var(--border);
+}
+.editor-block:last-child { border-bottom: none; }
+
+.editor-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 0.5rem 0.75rem 0.4rem;
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+textarea {
+    flex: 1;
+    width: 100%;
+    background: var(--surface);
+    color: var(--code);
+    border: none;
+    outline: none;
+    resize: none;
+    font-family: "Fira Code", "Cascadia Code", ui-monospace, monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    padding: 0.75rem;
+    tab-size: 2;
+}
+textarea::selection { background: var(--selection); }
+
+/* ── share-specific layout ── */
+body.share {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+body.share .preview {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}

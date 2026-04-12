@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>FRC Viz Builder</title>
+        <script
+            type="module"
+            src="https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"
+        ></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+        <script type="module" src="./mosaic-viz.js"></script>
+
+        <link rel="stylesheet" href="./frc-viz.css" />
+        <style>
+            /* builder-only: header spans both grid columns */
+            header { grid-column: 1 / -1; }
+        </style>
+    </head>
+    <body class="builder">
+        <header>
+            <h1>FRC Viz Builder</h1>
+            <span>edit SQL &amp; spec on the left · preview updates live</span>
+            <div class="spacer"></div>
+            <a id="share-btn" target="_blank" href="#">Share</a>
+        </header>
+
+        <div class="panel">
+            <div class="editor-block">
+                <div class="editor-label">SQL</div>
+                <textarea
+                    data-bind:sql
+                    data-effect="updateQueryParam('sql', LZString.compressToEncodedURIComponent($sql))"
+                    spellcheck="false"
+                ></textarea>
+            </div>
+
+            <div class="editor-block">
+                <div class="editor-label">Viz Spec (JSON)</div>
+                <textarea
+                    data-bind:viz
+                    data-effect="updateQueryParam('viz', LZString.compressToEncodedURIComponent($viz))"
+                    spellcheck="false"
+                ></textarea>
+            </div>
+        </div>
+
+        <!-- Set textarea values before datastar initialises so signals are seeded correctly -->
+        <script>
+            const DEFAULT_SQL =
+`ATTACH IF NOT EXISTS 'https://frc-db.dev/data.db' AS frc (READ_ONLY);
+
+CREATE OR REPLACE TEMP TABLE event_type_enum (id INTEGER PRIMARY KEY, label TEXT);
+INSERT OR IGNORE INTO event_type_enum VALUES
+  (0,'Regional'),(1,'District'),(2,'District CMP'),
+  (3,'CMP Division'),(4,'CMP Finals'),
+  (5,'District Championship Division'),(6,'Festival of Champions'),(7,'Remote');
+
+CREATE OR REPLACE TEMP TABLE {{VIEW_NAME}} AS
+WITH match_data AS (
+  SELECT greatest(red_score, blue_score) AS score, comp_level, event_key, year
+  FROM frc.matches
+  WHERE red_score >= 0 AND blue_score >= 0
+)
+SELECT m.score, m.comp_level, m.year, e.name AS event_name, et.label AS event_type_enum
+FROM match_data m
+JOIN frc.events e  ON m.event_key = e.key
+JOIN event_type_enum et ON e.event_type = et.id
+WHERE e.event_type < 6;`;
+
+            const DEFAULT_VIZ =
+`{
+  "params": {
+    "filter": { "select": "crossfilter" }
+  },
+  "vconcat": [
+    {
+      "input": "menu",
+      "label": "Season",
+      "as": "$filter",
+      "from": "{{VIEW_NAME}}",
+      "column": "year",
+      "value": {{YEAR}}
+    },
+    {
+      "plot": [
+        {
+          "mark": "rectY",
+          "data": { "from": "{{VIEW_NAME}}", "filterBy": "$filter" },
+          "x": { "bin": "score" },
+          "y": { "count": null },
+          "fill": "steelblue",
+          "inset": 0.5
+        },
+        { "select": "intervalX", "as": "$filter" }
+      ],
+      "width": 720, "height": 220, "marginTop": 20, "marginBottom": 40,
+      "xLabel": "Match Score", "yLabel": "Frequency"
+    },
+    {
+      "hconcat": [
+        {
+          "plot": [
+            {
+              "mark": "barY",
+              "data": { "from": "{{VIEW_NAME}}", "filterBy": "$filter" },
+              "x": "comp_level",
+              "y": { "count": null },
+              "fill": "orange",
+              "sort": { "x": "-y" }
+            },
+            { "select": "toggleX", "as": "$filter" }
+          ],
+          "width": 340, "height": 220, "marginTop": 20, "marginBottom": 40,
+          "xLabel": "Comp Level", "yLabel": "Count"
+        },
+        {
+          "plot": [
+            {
+              "mark": "barY",
+              "data": { "from": "{{VIEW_NAME}}", "filterBy": "$filter" },
+              "x": "event_type_enum",
+              "y": { "count": null },
+              "fill": "purple",
+              "sort": { "x": "-y" }
+            },
+            { "select": "toggleX", "as": "$filter" }
+          ],
+          "width": 340, "height": 220, "marginTop": 20, "marginBottom": 40,
+          "xLabel": "Event Type", "yLabel": "Count"
+        }
+      ]
+    }
+  ]
+}`;
+
+            (function () {
+                const params = new URLSearchParams(window.location.search);
+                const decompress = (v) => LZString.decompressFromEncodedURIComponent(v);
+
+                document.querySelector('[data-bind\\:sql]').value =
+                    params.get('sql') ? decompress(params.get('sql')) : DEFAULT_SQL;
+                document.querySelector('[data-bind\\:viz]').value =
+                    params.get('viz') ? decompress(params.get('viz')) : DEFAULT_VIZ;
+            })();
+
+            document.getElementById('share-btn').addEventListener('click', function (e) {
+                e.preventDefault();
+                const sql = document.querySelector('[data-bind\\:sql]').value;
+                const viz = document.querySelector('[data-bind\\:viz]').value;
+                const url = `share.html?sql=${LZString.compressToEncodedURIComponent(sql)}&viz=${LZString.compressToEncodedURIComponent(viz)}`;
+                window.open(url, '_blank');
+            });
+        </script>
+
+        <div class="preview">
+            <mosaic-viz
+                id="score-viz"
+                properties='{"VIEW_NAME":"scores","YEAR":2026}'
+                data-attr:query="$sql"
+                query="ATTACH IF NOT EXISTS 'https://frc-db.dev/data.db' AS frc (READ_ONLY);"
+                data-attr:viz="$viz"
+            ></mosaic-viz>
+        </div>
+
+        <script>
+            function updateQueryParam(key, value) {
+                const url = new URL(window.location.href);
+                if (value) {
+                    url.searchParams.set(key, value);
+                } else {
+                    url.searchParams.delete(key);
+                }
+                window.history.replaceState(null, "", url.toString());
+            }
+        </script>
+    </body>
+</html>

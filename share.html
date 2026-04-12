@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>FRC Viz</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+        <script type="module" src="./mosaic-viz.js"></script>
+        <link rel="stylesheet" href="./frc-viz.css" />
+        <style>
+            #watermark {
+                position: fixed;
+                bottom: 0.75rem;
+                right: 1rem;
+                font-size: 0.7rem;
+                color: #3b4a6b;
+                text-decoration: none;
+                letter-spacing: 0.03em;
+            }
+            #watermark:hover { color: #64748b; }
+        </style>
+    </head>
+    <body class="share">
+        <a id="watermark" href="https://frc-db.dev" target="_blank">frc-db.dev</a>
+        <div class="preview">
+            <mosaic-viz
+                id="viz"
+                properties='{"VIEW_NAME":"scores","YEAR":2026}'
+            ></mosaic-viz>
+        </div>
+
+        <script>
+            (function () {
+                const params = new URLSearchParams(window.location.search);
+                const el = document.getElementById("viz");
+
+                const sql = params.get("sql");
+                const viz = params.get("viz");
+
+                if (sql) el.setAttribute("query",      LZString.decompressFromEncodedURIComponent(sql));
+                if (viz) el.setAttribute("viz",        LZString.decompressFromEncodedURIComponent(viz));
+
+                if (!sql && !viz) {
+                    el.innerHTML = "<p style='color:#888;padding:1rem'>No viz specified. Open this page from the <a href='viz-builder.html'>builder</a>.</p>";
+                }
+            })();
+        </script>
+    </body>
+</html>
